@@ -40,6 +40,9 @@ input[type=text],input[type=number],input[type=password],select{font:inherit;pad
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/docx-preview@0.3.2/dist/docx-preview.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
 </head><body><main>
 <h1>PDF Studio</h1>
@@ -59,9 +62,9 @@ input[type=text],input[type=number],input[type=password],select{font:inherit;pad
 <input type="text" id="wm" placeholder="Watermark text"><button class="b" data-a="wm">Add watermark</button></div>
 <div class="row"><em>Convert</em>
 <button class="b" data-a="png">PDF to PNG</button><button class="b" data-a="jpg">PDF to JPG</button>
-<button class="b" data-a="txt">PDF to text</button><button class="b" data-a="docx">PDF to Word</button>
+<button class="b" data-a="txt">PDF to text</button><button class="b" data-a="docx">PDF to Word</button><button class="b" data-a="xlsx">PDF to Excel</button><button class="b" data-a="docxt">Word (text only)</button>
 <select id="cq"><option value="a">Compress: balanced</option><option value="b">Compress: smallest</option><option value="c">Black and white</option></select>
-<button class="b" data-a="cmp">Compress</button>
+<button class="b" data-a="cmp">Compress</button><select id="ol"><option value="eng">OCR: English</option><option value="hin">OCR: Hindi</option><option value="eng+hin">OCR: English + Hindi</option></select><button class="b" data-a="ocr">Make searchable (OCR)</button>
 <input type="password" id="pw" placeholder="Password, if locked"></div>
 <div class="row"><em>Save</em>
 <button class="b" data-a="undo">Undo</button><button class="b p" data-a="save">Download PDF</button>
@@ -120,7 +123,7 @@ async function addFiles(files){
     try{s=await PDFDocument.load(buf)}catch(e){if(!/encrypt/i.test(e.message))throw e;s=await PDFDocument.load(await raster(buf,2,.9,false,$('#pw').value||undefined))}
     (await out.copyPages(s,s.getPageIndices())).forEach(p=>out.addPage(p))}
    else if(f.type.startsWith('image/'))await imgPage(out,f);
-   else if(n.endsWith('.docx'))await txtPages(out,(await mammoth.extractRawText({arrayBuffer:await f.arrayBuffer()})).value);
+   else if(n.endsWith('.docx')){const buf=await f.arrayBuffer();try{await docxPages(out,buf)}catch(e){console.error(e);await txtPages(out,(await mammoth.extractRawText({arrayBuffer:buf})).value)}}
    else if(/\.(txt|md|csv|json|html?)$/.test(n)||f.type.startsWith('text/')){let s=await f.text();if(/\.html?$/.test(n))s=new DOMParser().parseFromString(s,'text/html').body.textContent;await txtPages(out,s)}
    else msg('Unsupported file: '+f.name)}
   catch(e){msg(f.name+': '+e.message+(/password/i.test(e.message)?' (type the password in the box and add the file again)':''));console.error(e)}}
@@ -141,6 +144,18 @@ async function toDocx(){const P=await pageTexts(),esc=s=>s.replace(/[\x00-\x08\x
  z.file('_rels/.rels',X+'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
  z.file('word/document.xml',X+`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${b}</w:body></w:document>`);
  dl(await z.generateAsync({type:'uint8array'}),name+'.docx')}
+async function docxPages(out,buf){const h=document.createElement('div');h.style.cssText='position:fixed;left:-99999px;top:0';document.body.append(h);
+ try{await docx.renderAsync(buf,h,null,{inWrapper:false,breakPages:true});const ss=h.querySelectorAll('section.docx');if(!ss.length)throw new Error('no pages');
+  for(const s of ss){const c=await html2canvas(s,{scale:2,backgroundColor:'#fff',useCORS:true}),im=await out.embedPng(await blob(c,'image/png')),w=s.offsetWidth*.75,g=s.offsetHeight*.75;out.addPage([w,g]).drawImage(im,{x:0,y:0,width:w,height:g})}}finally{h.remove()}}
+async function conv(to){if(!bytes)return;try{msg('Converting on the server… this can take a minute.');const d=await PDFDocument.load(bytes),b=await(await reorder(d,T())).save();
+ if(b.length>4.4e6)return msg('This selection is over the 4.5 MB server limit. Select fewer pages and convert in parts.');
+ const r=await fetch('/api/convert?to='+to,{method:'POST',body:b});if(!r.ok)throw new Error((await r.text()).slice(0,200)||r.status);
+ dl(new Uint8Array(await r.arrayBuffer()),name+'.'+to)}catch(e){msg('Conversion failed: '+e.message+(to==='docx'?' You can still use “Word (text only)”.':''))}}
+async function ocr(){if(!bytes)return;try{msg('Loading OCR engine…');const w=await Tesseract.createWorker($('#ol').value,1,{logger:m=>m.status==='recognizing text'&&msg('OCR '+Math.round(m.progress*100)+'%')}),d=await PDFDocument.load(bytes),n=await PDFDocument.create(),ix=T();
+ for(let i=0;i<N();i++){if(!ix.includes(i)){n.addPage((await n.copyPages(d,[i]))[0]);continue}
+  const p=await pj.getPage(i+1),a=p.getViewport({scale:1}),v=p.getViewport({scale:2}),c=cv(v.width,v.height),x=c.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,c.width,c.height);await p.render({canvasContext:x,viewport:v}).promise;
+  const{data}=await w.recognize(c,{},{pdf:true}),[ep]=await n.embedPdf(new Uint8Array(data.pdf));n.addPage([a.width,a.height]).drawPage(ep,{x:0,y:0,width:a.width,height:a.height});msg('OCR page '+(i+1)+' of '+N())}
+ await w.terminate();await setBytes(await n.save());msg('OCR done. Text in the PDF is now selectable and searchable.')}catch(e){msg('OCR failed: '+e.message)}}
 const A={
  all(){sel=new Set([...Array(N()).keys()]);upd()},none(){sel.clear();upd()},
  rl(){return op(d=>{T().forEach(i=>{const p=d.getPage(i);p.setRotation(degrees((ang(p)+270)%360))})})},
@@ -155,7 +170,7 @@ const A={
    p.drawImage(im,{x:cx-(W/2*c-H/2*s),y:cy-(W/2*s+H/2*c),width:W,height:H,rotate:degrees(45),opacity:.3})})})},
  crop(){return openM('crop')},edit(){return openM('edit')},
  png(){return bytes&&toImgs('png')},jpg(){return bytes&&toImgs('jpg')},
- async txt(){if(bytes)dl((await pageTexts()).join('\n\n--- page break ---\n\n'),name+'.txt')},docx(){return bytes&&toDocx()},
+ async txt(){if(bytes)dl((await pageTexts()).join('\n\n--- page break ---\n\n'),name+'.txt')},docx(){return conv('docx')},xlsx(){return conv('xlsx')},docxt(){return bytes&&toDocx()},ocr,
  cmp(){const m={a:[1.5,.7,0],b:[1,.45,0],c:[1.5,.7,1]}[$('#cq').value];msg('Compressing…');return op(async()=>{const o=await PDFDocument.load(await raster(bytes,m[0],m[1],m[2]));return o})},
  undo(){if(!hist.length)return msg('Nothing to undo.');return setBytes(hist.pop(),false)},
  save(){if(bytes)dl(bytes,name+'-edited.pdf')},
